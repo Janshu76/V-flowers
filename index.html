@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Who needs flowers</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  p {
+    position: fixed; bottom: 3vh; left: 0; right: 0; margin: 0; text-align: center;
+    font: 11px ui-monospace, Menlo, Consolas, monospace; letter-spacing: .15em;
+    color: #6b7a99; text-shadow: 0 0 8px #000; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<p>TAP TO REPLAY</p>
+
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const DURATION = 9000;                       // ms for the whole bouquet to grow
+  const RAMP = " .,:;+*#%&@";                  // dark -> bright characters for the flowers
+  const FONT = "ui-monospace, Menlo, Consolas, monospace";
+
+  // ---------- seeded random so the bouquet is the same every visit ----------
+  function rng(seed) {
+    return () => {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  const ease = (x) => 1 - Math.pow(1 - clamp(x), 3);
+
+  // ---------- the bouquet, described in units of "bouquet height" ----------
+  const COLORS = [
+    ["#7a0c18", "#ff3d3d"], ["#a0206a", "#ff80d4"], ["#b08000", "#ffe24d"],
+    ["#a77f66", "#fff0dc"], ["#b8481a", "#ffa65e"],
+  ];
+  const rand = rng(7);
+  // flower heads at fixed, well-spaced spots (x, y in bouquet-height units; y is up = negative)
+  const FLOWERS = [[-0.62, -0.50], [-0.30, -0.80], [0.02, -1.02], [0.34, -0.78], [0.64, -0.52], [-0.12, -0.52], [0.24, -0.46]];
+  // buds / reeds with no open flower
+  const REEDS = [[-0.72, -0.62], [-0.45, -0.66], [-0.08, -0.78], [0.52, -0.66], [0.74, -0.6]];
+  const stems = [...FLOWERS.map((t) => [t, true]), ...REEDS.map((t) => [t, false])].map(([tip, isFlower], i) => ({
+    tip: { x: tip[0], y: tip[1] }, len: Math.hypot(tip[0], tip[1]), isFlower,
+    a: Math.atan2(tip[0], -tip[1]), bend: (rand() - 0.5) * 0.35, delay: rand() * 0.12,
+    color: COLORS[i % COLORS.length], r: 0.085 + rand() * 0.03,
+    tilt: 0.9 + rand() * 0.1, rot: rand() * 6.28,
+    leaves: Array.from({ length: 2 }, (_, k) => ({
+      u: 0.3 + k * 0.25 + rand() * 0.08, side: rand() < 0.5 ? -1 : 1, size: 0.12 + rand() * 0.1,
+    })),
+    stamens: Array.from({ length: 5 }, () => rand() * 6.28),
+  }));
+  const tipOf = (s) => s.tip;
+  function pt(s, t) {            // curve that starts straight up, then bends out to the tip
+    const tip = s.tip, cx = s.bend * 0.15, cy = tip.y * 0.75, m = 1 - t;
+    return { x: 2 * m * t * cx + t * t * tip.x, y: 2 * m * t * cy + t * t * tip.y };
+  }
+
+  // ---------- drawing the bouquet as normal shapes on a hidden canvas ----------
+  const art = document.createElement("canvas");
+  const actx = art.getContext("2d");
+
+  function drawLeaf(x, y, ang, len, p) {
+    const L = len * p, w = len * 0.07 * p;
+    actx.save(); actx.translate(x, y); actx.rotate(ang);
+    const g = actx.createLinearGradient(0, 0, L, 0);
+    g.addColorStop(0, "#1d6b2a"); g.addColorStop(1, "#7fd24f");
+    actx.fillStyle = g;
+    actx.beginPath(); actx.moveTo(0, 0);
+    actx.quadraticCurveTo(L * 0.5, -w, L, 0);
+    actx.quadraticCurveTo(L * 0.5, w, 0, 0); actx.fill();
+    actx.strokeStyle = "#b6f07a"; actx.lineWidth = Math.max(1, len * 0.012);
+    actx.beginPath(); actx.moveTo(0, 0); actx.lineTo(L * 0.9, 0); actx.stroke();
+    actx.restore();
+  }
+
+  function drawFlower(s, x, y, H, p) {
+    const L = s.r * H * p;
+    actx.save(); actx.translate(x, y); actx.rotate(s.rot); actx.scale(1, s.tilt);
+    for (let i = 0; i < 6; i++) {
+      actx.save(); actx.rotate(i * Math.PI / 3 + (i % 2) * 0.07);
+      const g = actx.createLinearGradient(0, 0, L, 0);
+      g.addColorStop(0, s.color[0]); g.addColorStop(1, s.color[1]);
+      actx.fillStyle = g;
+      actx.beginPath(); actx.moveTo(0, 0);
+      actx.bezierCurveTo(L * 0.3, -L * 0.34, L * 0.75, -L * 0.3, L, 0);
+      actx.bezierCurveTo(L * 0.75, L * 0.3, L * 0.3, L * 0.34, 0, 0); actx.fill();
+      actx.strokeStyle = "rgba(255,255,255,.45)"; actx.lineWidth = Math.max(1, L * 0.04);
+      actx.beginPath(); actx.moveTo(L * 0.1, 0); actx.lineTo(L * 0.85, 0); actx.stroke();
+      actx.restore();
+    }
+    for (const a of s.stamens) {                       // stamens
+      actx.strokeStyle = "#f6e7a8"; actx.lineWidth = Math.max(1, L * 0.03);
+      actx.beginPath(); actx.moveTo(0, 0);
+      actx.lineTo(Math.cos(a) * L * 0.55, Math.sin(a) * L * 0.55); actx.stroke();
+      actx.fillStyle = "#c2571a"; actx.beginPath();
+      actx.arc(Math.cos(a) * L * 0.55, Math.sin(a) * L * 0.55, L * 0.05, 0, 6.3); actx.fill();
+    }
+    actx.restore();
+  }
+
+  function drawMoon(p, W, H) {
+    if (p <= 0) return;
+    const R = Math.min(W, H) * 0.085, x = W * 0.74, y = H * 0.2;
+    actx.save(); actx.globalAlpha = p;
+    const glow = actx.createRadialGradient(x, y, R * 0.8, x, y, R * 3);   // soft halo
+    glow.addColorStop(0, "rgba(255,240,190,0.30)"); glow.addColorStop(1, "rgba(255,240,190,0)");
+    actx.fillStyle = glow; actx.beginPath(); actx.arc(x, y, R * 3, 0, 6.3); actx.fill();
+    const disc = actx.createRadialGradient(x - R * 0.3, y - R * 0.3, R * 0.1, x, y, R);
+    disc.addColorStop(0, "#fffbe8"); disc.addColorStop(1, "#e8d9a0");
+    actx.fillStyle = disc; actx.beginPath(); actx.arc(x, y, R, 0, 6.3); actx.fill();
+    actx.globalCompositeOperation = "destination-out";                  // bite out a crescent
+    actx.beginPath(); actx.arc(x + R * 0.5, y - R * 0.2, R * 0.88, 0, 6.3); actx.fill();
+    actx.restore();
+  }
+
+  function drawScene(T, W, H, bx, by, BH) {
+    actx.clearRect(0, 0, W, H);
+    drawMoon(ease(T / 0.25), W, H);
+    actx.save(); actx.translate(bx, by);
+    const flowers = [];
+    stems.forEach((s, i) => {
+      const sp = ease((T - i * 0.015) / 0.4);                    // stem growth 0..1
+      if (sp <= 0) return;
+      // stem
+      actx.strokeStyle = "#3f9a3a"; actx.lineWidth = Math.max(1.5, BH * 0.011);
+      actx.lineCap = "round"; actx.beginPath(); actx.moveTo(0, 0);
+      for (let k = 1; k <= 30; k++) { const q = pt(s, (k / 30) * sp); actx.lineTo(q.x * BH, q.y * BH); }
+      actx.stroke();
+      // leaves
+      for (const lf of s.leaves) {
+        if (lf.u > sp) continue;
+        const lp = ease((T - 0.15 - lf.u * 0.3) / 0.3); if (lp <= 0) continue;
+        const a = pt(s, lf.u), b = pt(s, Math.min(1, lf.u + 0.02));
+        const th = Math.atan2(b.y - a.y, b.x - a.x);
+        drawLeaf(a.x * BH, a.y * BH, th - lf.side * 0.55, lf.size * BH, lp);
+      }
+      // flower or bud
+      const tip = tipOf(s), fp = ease((T - 0.5 - s.delay) / 0.3);
+      if (s.isFlower) {
+        if (fp > 0) flowers.push({ s, x: tip.x * BH, y: tip.y * BH, fp });
+        else if (sp > 0.95) {                                   // bud
+          actx.fillStyle = s.color[1]; actx.beginPath();
+          actx.ellipse(tip.x * BH, tip.y * BH, BH * 0.012, BH * 0.03, s.a, 0, 6.3); actx.fill();
+        }
+      }
+    });
+    flowers.sort((a, b) => a.y - b.y).forEach((f) => drawFlower(f.s, f.x, f.y, BH, f.fp));
+    actx.restore();
+  }
+
+  // ---------- turning pixels into characters ----------
+  let W, H, dpr, fs, cw, ch, cols, rows, bg, small, sctx, start = 0, running = false;
+
+  function layout() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    art.width = W; art.height = H;
+    fs = W < 600 ? 5 : 6; cw = fs * 0.8; ch = fs * 1.2;     // wider spacing makes the character field less dense
+    cols = Math.ceil(W / cw); rows = Math.ceil(H / ch);
+    small = document.createElement("canvas"); small.width = cols; small.height = rows;
+    sctx = small.getContext("2d", { willReadFrequently: true });
+    // the "v" background is drawn once and cached
+    bg = document.createElement("canvas"); bg.width = W * dpr; bg.height = H * dpr;
+    const b = bg.getContext("2d"); b.scale(dpr, dpr);
+    b.fillStyle = "#000"; b.fillRect(0, 0, W, H);
+    b.font = fs + "px " + FONT; b.textBaseline = "top";
+    const r = rng(3);
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      const k = r();                                            // a little variety in brightness
+      const isJ = k < 0.05;
+      b.fillStyle = isJ ? "rgba(90,120,175,0.4)" : k > 0.97 ? "rgba(150,185,255,.55)" : `rgba(90,120,175,${0.2 + k * 0.16})`;
+      b.fillText(isJ ? "j" : "v", x * cw, y * ch);
+    }
+  }
+
+  function frame(now) {
+    const T = clamp((now - start) / DURATION);
+    const BH = Math.min(H * 0.6, W * 0.62);
+    drawScene(T, W, H, W / 2, H * 0.9, BH);
+    sctx.clearRect(0, 0, cols, rows);
+    sctx.imageSmoothingQuality = "high";
+    sctx.drawImage(art, 0, 0, cols, rows);                      // shrink: 1 pixel = 1 character
+    const px = sctx.getImageData(0, 0, cols, rows).data;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.drawImage(bg, 0, 0, W, H);
+    ctx.font = "bold " + fs + "px " + FONT; ctx.textBaseline = "top";
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      const i = (y * cols + x) * 4, a = px[i + 3];
+      if (a < 60) continue;
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      const lum = (0.3 * r + 0.59 * g + 0.11 * b) / 255;
+      ctx.fillStyle = "#000"; ctx.fillRect(x * cw, y * ch, cw + 0.5, ch);   // hide the v underneath
+      ctx.fillStyle = `rgb(${Math.min(255, r * 1.15)},${Math.min(255, g * 1.15)},${Math.min(255, b * 1.15)})`;
+      ctx.fillText(RAMP[Math.max(1, Math.round(lum * (RAMP.length - 1)))], x * cw, y * ch);
+    }
+    if (T < 1) requestAnimationFrame(frame); else running = false;
+  }
+
+  function play() {
+    start = performance.now(); if (running) return; running = true; requestAnimationFrame(frame);
+  }
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function go() {
+    layout();
+    if (still) { start = performance.now() - DURATION; running = true; requestAnimationFrame(frame); }
+    else play();
+  }
+
+  addEventListener("resize", () => {
+    clearTimeout(go.t);
+    go.t = setTimeout(() => { layout(); start = performance.now() - DURATION; running = true; requestAnimationFrame(frame); }, 150);
+  });
+  addEventListener("pointerdown", () => { if (!running) play(); else start = performance.now(); });
+  go();
+})();
+</script>
+</body>
+</html>
